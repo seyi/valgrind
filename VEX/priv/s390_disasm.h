@@ -66,7 +66,9 @@ enum {
    S390_ARG_UDLB = 9,
    S390_ARG_CABM = 10,
    S390_ARG_MNM = 11,
-   S390_ARG_XMNM = 12
+   S390_ARG_XMNM = 12,
+   S390_ARG_VR = 13,
+   S390_ARG_UDVB = 14,
 };
 
 /* The different kinds of extended mnemonics */
@@ -81,7 +83,10 @@ enum {
    S390_XMNM_LOC = 7,
    S390_XMNM_LOCG = 8,
    S390_XMNM_STOC = 9,
-   S390_XMNM_STOCG = 10
+   S390_XMNM_STOCG = 10,
+   S390_XMNM_STOCFH = 11,
+   S390_XMNM_LOCFH = 12,
+   S390_XMNM_LOCFHR = 13
 };
 
 void s390_disasm(UInt command, ...);

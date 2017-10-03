@@ -135,6 +135,7 @@ static HReg          s390_isel_float_expr(ISelEnv *, IRExpr *);
 static void          s390_isel_float128_expr(HReg *, HReg *, ISelEnv *, IRExpr *);
 static HReg          s390_isel_dfp_expr(ISelEnv *, IRExpr *);
 static void          s390_isel_dfp128_expr(HReg *, HReg *, ISelEnv *, IRExpr *);
+static HReg          s390_isel_vec_expr(ISelEnv *, IRExpr *);
 
 
 static Int
@@ -242,6 +243,18 @@ newVRegF(ISelEnv *env)
    return mkVRegF(env->vreg_ctr++);
 }
 
+/* Allocate a new virtual vector register */
+static __inline__ HReg
+mkVRegV(UInt ix)
+{
+   return mkHReg(/*virtual*/True, HRcVec128, /*encoding*/0, ix);
+}
+
+static __inline__ HReg
+newVRegV(ISelEnv *env)
+{
+   return mkVRegV(env->vreg_ctr++);
+}
 
 /* Construct a non-virtual general purpose register */
 static __inline__ HReg
@@ -256,6 +269,13 @@ static __inline__ HReg
 make_fpr(UInt regno)
 {
    return s390_hreg_fpr(regno);
+}
+
+/* Construct a non-virtual vector register */
+static __inline__ HReg
+make_vr(UInt regno)
+{
+   return s390_hreg_vr(regno);
 }
 
 
@@ -441,6 +461,19 @@ s390_opnd_imm(ULong value)
 }
 
 
+/* Construct a RMI operand for a amode */
+static __inline__ s390_opnd_RMI
+s390_opnd_amode(s390_amode *amode)
+{
+   s390_opnd_RMI opnd;
+
+   opnd.tag  = S390_OPND_AMODE;
+   opnd.variant.am = amode;
+
+   return opnd;
+}
+
+
 /* Return 1, if EXPR represents the constant 0 */
 static Bool
 s390_expr_is_const_zero(IRExpr *expr)
@@ -481,6 +514,53 @@ get_const_value_as_ulong(const IRConst *con)
    }
 }
 
+
+/*  Substract n from stack pointer. Assumes 0 <= n <= 256 && n % 8 == 0. */
+static void
+sub_from_SP ( ISelEnv* env, UInt n )
+{
+   HReg sp;
+   vassert( n < 256 && (n%8) == 0);
+   sp = s390_hreg_stack_pointer();
+   addInstr(env, s390_insn_alu(sizeof(ULong), S390_ALU_SUB, sp, s390_opnd_imm(n)));
+}
+
+
+/*  Substract n from stack pointer. Assumes 0 <= n <= 256 && n % 8 == 0. */
+static void
+add_to_SP ( ISelEnv* env, UInt n )
+{
+   HReg sp;
+   vassert(n < 256 && (n%8) == 0);
+   sp = s390_hreg_stack_pointer();
+   addInstr(env, s390_insn_alu(sizeof(ULong), S390_ALU_ADD, sp, s390_opnd_imm(n)));
+}
+
+
+static HReg
+vec_generate_zeroes(ISelEnv* env)
+{
+   HReg dst = newVRegV(env);
+   addInstr(env, s390_insn_unop(16, S390_VEC_FILL, dst, s390_opnd_imm(0x00)));
+   return dst;
+}
+
+static HReg
+vec_generate_ones(ISelEnv* env)
+{
+   HReg dst = newVRegV(env);
+   addInstr(env, s390_insn_unop(16, S390_VEC_FILL, dst, s390_opnd_imm(0xffff)));
+   return dst;
+}
+
+static HReg
+vec_do_notV128(ISelEnv* env, HReg arg)
+{
+   HReg dst = newVRegV(env);
+   addInstr(env, s390_insn_vec_binop(16, S390_VEC_XOR,dst,
+            arg, vec_generate_ones(env)));
+   return dst;
+}
 
 /* Call a helper (clean or dirty)
    Arguments must satisfy the following conditions:
@@ -524,8 +604,7 @@ doHelperCall(/*OUT*/UInt *stackAdjustAfterCall,
 
    /* The return type can be I{64,32,16,8} or V{128,256}.  In the
       latter two cases, it is expected that |args| will contain the
-      special node IRExpr_VECRET(). For s390, however, V128 and V256 return
-      values do not occur as we generally do not support vector types.
+      special node IRExpr_VECRET().
 
       |args| may also contain IRExpr_GSPTR(), in which case the value
       in the guest state pointer register is passed as the
@@ -561,7 +640,7 @@ doHelperCall(/*OUT*/UInt *stackAdjustAfterCall,
             ++arg_errors;
             vex_printf("calling %s: argument #%u has type ", callee->name, i);
             ppIRType(type);
-            vex_printf("; Ity_I64 is required\n");
+            vex_printf("; Ity_I64 or Ity_V128 is required\n");
          }
       }
    }
@@ -571,7 +650,11 @@ doHelperCall(/*OUT*/UInt *stackAdjustAfterCall,
 
    /* If these fail, the IR is ill-formed */
    vassert(nGSPTRs == 0 || nGSPTRs == 1);
-   vassert(nVECRETs == 0);
+   if (retTy == Ity_V128) {
+      vassert(nVECRETs == 1);
+   } else {
+      vassert(nVECRETs == 0);
+   }
 
    argreg = 0;
 
@@ -583,6 +666,11 @@ doHelperCall(/*OUT*/UInt *stackAdjustAfterCall,
          tmpregs[argreg] = newVRegI(env);
          addInstr(env, s390_insn_move(sizeof(ULong), tmpregs[argreg],
                                       s390_hreg_guest_state_pointer()));
+      } else if(UNLIKELY(arg->tag == Iex_VECRET)) {
+         /* Return vector via stack */
+         tmpregs[argreg] = newVRegI(env);
+         sub_from_SP(env, sizeofIRType(Ity_V128));
+         addInstr(env, s390_insn_move(sizeof(ULong), tmpregs[argreg], s390_hreg_stack_pointer()));
       } else {
          tmpregs[argreg] = s390_isel_int_expr(env, args[i]);
       }
@@ -625,6 +713,10 @@ doHelperCall(/*OUT*/UInt *stackAdjustAfterCall,
    case Ity_I64: case Ity_I32: case Ity_I16: case Ity_I8:
       *retloc = mk_RetLoc_simple(RLPri_Int);
       break;
+   case Ity_V128:
+      *retloc = mk_RetLoc_spRel(RLPri_V128SpRel, 0);
+      *stackAdjustAfterCall = sizeof(V128);
+      break;
    default:
       /* IR can denote other possible return types, but we don't
          handle those here. */
@@ -647,7 +739,7 @@ doHelperCall(/*OUT*/UInt *stackAdjustAfterCall,
 /* Set the BFP rounding mode in the FPC. This function is called for
    all non-conversion BFP instructions as those will always get the
    rounding mode from the FPC. */
-static void 
+static void
 set_bfp_rounding_mode_in_fpc(ISelEnv *env, IRExpr *irrm)
 {
    vassert(typeOfIRExpr(env->type_env, irrm) == Ity_I32);
@@ -1487,6 +1579,32 @@ s390_isel_int_expr_wrk(ISelEnv *env, IRExpr *expr)
          is_commutative = False;
          break;
 
+      case Iop_GetElem8x16:
+      case Iop_GetElem16x8:
+      case Iop_GetElem32x4:
+      case Iop_GetElem64x2:{
+         HReg dst = newVRegI(env);
+         HReg vec = s390_isel_vec_expr(env, arg1);
+         s390_amode* operand = s390_isel_amode(env,IRExpr_Unop(Iop_8Uto64, arg2));
+         switch (expr->Iex.Binop.op) {
+         case Iop_GetElem8x16:
+            size = 1;
+            break;
+         case Iop_GetElem16x8:
+            size = 2;
+            break;
+         case Iop_GetElem32x4:
+            size = 4;
+            break;
+         case Iop_GetElem64x2:
+            size = 8;
+            break;
+         default:
+            vpanic("s390_isel_int_expr: impossible Iop_GetElem type");
+         }
+         addInstr(env, s390_insn_vec_amodeop(size, S390_VEC_GET_ELEM, dst, vec, operand));
+         return dst;
+      }
       default:
          goto irreducible;
       }
@@ -1678,6 +1796,38 @@ s390_isel_int_expr_wrk(ISelEnv *env, IRExpr *expr)
 
          s390_isel_int128_expr(&dst_hi, &dst_lo, env, arg);
          return dst_hi;
+      }
+
+      if(unop == Iop_V128to64 || unop == Iop_V128HIto64 || unop == Iop_V128to32) {
+         dst = newVRegI(env);
+         HReg vec = s390_isel_vec_expr(env, arg);
+         /* This is big-endian machine */
+         Int off;
+         switch (unop) {
+            case Iop_V128HIto64:
+               off = 0;
+               break;
+            case Iop_V128to64:
+               off = 8;
+               break;
+            case Iop_V128to32:
+               off = 12;
+               break;
+            default:
+               ppIROp(unop);
+               vpanic("s390_isel_int_expr: unhandled V128toSMTH operation");
+         }
+         s390_amode* m16_sp = s390_amode_for_stack_pointer(0);
+         s390_amode* off_sp = s390_amode_for_stack_pointer(off);
+
+         /* We could use negative displacement but vector instructions
+            require 12bit unsigned ones. So we have to allocate space on
+            stack just for one load and free it after. */
+         sub_from_SP(env, 16);
+         addInstr(env, s390_insn_store(sizeof(V128), m16_sp, vec));
+         addInstr(env, s390_insn_load(sizeof(ULong), dst, off_sp));
+         add_to_SP(env, 16);
+         return dst;
       }
 
       dst  = newVRegI(env);     /* Result goes into a new register */
@@ -2157,7 +2307,7 @@ s390_isel_float128_expr_wrk(HReg *dst_hi, HReg *dst_lo, ISelEnv *env,
 
          irrm = expr->Iex.Binop.arg1;
          left = expr->Iex.Binop.arg2;
-         
+
          if (s390_host_has_fpext) {
             rm = get_bfp_rounding_mode(env, irrm);
          } else {
@@ -3112,7 +3262,7 @@ s390_isel_dfp_expr_wrk(ISelEnv *env, IRExpr *expr)
          addInstr(env, s390_insn_move(8, f15, op_lo));
 
          /* result --> (f12, f14) */
- 
+
          /* load-rounded has a rounding mode field when the floating point
             extension facility is installed. */
          if (s390_host_has_fpext) {
@@ -3504,6 +3654,631 @@ s390_isel_cc(ISelEnv *env, IRExpr *cond)
 
 
 /*---------------------------------------------------------*/
+/*--- ISEL: Vector expressions (128 bit)                ---*/
+/*---------------------------------------------------------*/
+
+static HReg
+s390_isel_vec_expr_wrk(ISelEnv *env, IRExpr *expr)
+{
+   IRType ty = typeOfIRExpr(env->type_env, expr);
+   UChar size;
+
+   vassert(ty == Ity_V128);
+
+   size = sizeofIRType(ty);
+
+   switch (expr->tag) {
+   case Iex_RdTmp:
+      /* Return the virtual register that holds the temporary. */
+      return lookupIRTemp(env, expr->Iex.RdTmp.tmp);
+
+      /* --------- LOAD --------- */
+   case Iex_Load: {
+      HReg        dst = newVRegV(env);
+      s390_amode *am  = s390_isel_amode(env, expr->Iex.Load.addr);
+
+      if (expr->Iex.Load.end != Iend_BE)
+         goto irreducible;
+
+      addInstr(env, s390_insn_load(size, dst, am));
+
+      return dst;
+   }
+
+      /* --------- GET --------- */
+   case Iex_Get: {
+      HReg dst = newVRegV(env);
+      s390_amode *am = s390_amode_for_guest_state(expr->Iex.Get.offset);
+
+      addInstr(env, s390_insn_load(size, dst, am));
+
+      return dst;
+   }
+
+      /* --------- UNARY OP --------- */
+   case Iex_Unop: {
+      HReg dst;
+      Bool is_signed;
+      HReg reg1;
+      IROp op = expr->Iex.Unop.op;
+      IRExpr* arg = expr->Iex.Unop.arg;
+      switch(op) {
+      case Iop_NotV128:
+         reg1 = s390_isel_vec_expr(env, arg);
+         return vec_do_notV128(env, reg1);
+
+      case Iop_CmpNEZ8x16:
+         size = 1;
+         goto Iop_CmpNEZ_wrk;
+      case Iop_CmpNEZ16x8:
+         size = 2;
+         goto Iop_CmpNEZ_wrk;
+      case Iop_CmpNEZ32x4:
+         size = 4;
+         goto Iop_CmpNEZ_wrk;
+      case Iop_CmpNEZ64x2: case Iop_CmpNEZ128x1:
+         size = 8;
+
+         Iop_CmpNEZ_wrk: {
+            dst = newVRegV(env);
+            reg1 = s390_isel_vec_expr(env, arg);
+            addInstr(env, s390_insn_vec_binop(size, S390_VEC_COMPARE_EQUAL, dst,
+                     reg1, vec_generate_zeroes(env)));
+            return vec_do_notV128(env, dst);
+         }
+
+      case Iop_Dup8x16:
+         size = 1;
+         goto Iop_Dup_wrk;
+      case Iop_Dup16x8:
+         size = 2;
+         goto Iop_Dup_wrk;
+      case Iop_Dup32x4:
+         size = 4;
+
+         Iop_Dup_wrk: {
+            HReg vr1 = vec_generate_zeroes(env);
+            s390_amode* amode2 = s390_isel_amode(env, IRExpr_Const(IRConst_U64(0)));
+            reg1 = s390_isel_int_expr(env, arg);
+
+            addInstr(env, s390_insn_vec_amodeintop(size, S390_VEC_SET_ELEM,
+                     vr1, amode2, reg1));
+
+            dst = newVRegV(env);
+            addInstr(env, s390_insn_unop(size, S390_VEC_DUPLICATE,
+                     dst, s390_opnd_reg(vr1)));
+            return dst;
+         }
+
+      case Iop_Abs8x16:
+         size = 1;
+         goto Iop_Abs_wrk;
+      case Iop_Abs16x8:
+         size = 2;
+         goto Iop_Abs_wrk;
+      case Iop_Abs32x4:
+         size = 4;
+         goto Iop_Abs_wrk;
+      case Iop_Abs64x2:
+         size = 8;
+
+         Iop_Abs_wrk: {
+            dst = newVRegV(env);
+            reg1 = s390_isel_vec_expr(env, arg);
+            addInstr(env, s390_insn_unop(size, S390_VEC_ABS, dst,
+                     s390_opnd_reg(reg1)));
+            return dst;
+         }
+
+      case Iop_Clz8x16:
+         size = 1;
+         is_signed = False;
+         goto Iop_CountZeroes_wrk;
+      case Iop_Ctz8x16:
+         size = 1;
+         is_signed = True;
+         goto Iop_CountZeroes_wrk;
+      case Iop_Clz16x8:
+         size = 2;
+         is_signed = False;
+         goto Iop_CountZeroes_wrk;
+      case Iop_Ctz16x8:
+         size = 2;
+         is_signed = True;
+         goto Iop_CountZeroes_wrk;
+      case Iop_Clz32x4:
+         size = 4;
+         is_signed = False;
+         goto Iop_CountZeroes_wrk;
+      case Iop_Ctz32x4:
+         size = 4;
+         is_signed = True;
+         goto Iop_CountZeroes_wrk;
+      case Iop_Clz64x2:
+         size = 8;
+         is_signed = False;
+         goto Iop_CountZeroes_wrk;
+      case Iop_Ctz64x2:
+         size = 8;
+         is_signed = True;
+
+         Iop_CountZeroes_wrk: {
+            dst = newVRegV(env);
+            reg1 = s390_isel_vec_expr(env, arg);
+
+            addInstr(env,
+                     s390_insn_unop(size,
+                                         is_signed ?
+                                             S390_VEC_COUNT_TRAILING_ZEROEZ
+                                             : S390_VEC_COUNT_LEADING_ZEROEZ,
+                                         dst, s390_opnd_reg(reg1)));
+            return dst;
+         }
+
+      case Iop_Cnt8x16: {
+         dst = newVRegV(env);
+         reg1 = s390_isel_vec_expr(env, arg);
+
+         addInstr(env,
+                  s390_insn_unop(1, S390_VEC_COUNT_ONES,
+                                 dst, s390_opnd_reg(reg1)));
+         return dst;
+      }
+
+      default:
+         goto irreducible;
+      }
+   }
+
+      /* --------- BINARY OP --------- */
+   case Iex_Binop: {
+      HReg dst = newVRegV(env);
+      HReg reg1, reg2;
+      IROp op = expr->Iex.Binop.op;
+      s390_vec_binop_t vec_op = 0;
+      IRExpr* arg1 = expr->Iex.Binop.arg1;
+      IRExpr* arg2 = expr->Iex.Binop.arg2;
+      switch(op) {
+      case Iop_Add8x16:
+         size = 1;
+         vec_op = S390_VEC_INT_ADD;
+         goto Iop_VV_wrk;
+      case Iop_Add16x8:
+         size = 2;
+         goto Iop_VV_wrk;
+      case Iop_Add32x4:
+         size = 4;
+         goto Iop_VV_wrk;
+      case Iop_Add64x2:
+         size = 8;
+         goto Iop_VV_wrk;
+
+      case Iop_Add128x1:
+         size = 16;
+         goto Iop_VV_wrk;
+
+      case Iop_Sub8x16:
+         size = 1;
+         vec_op = S390_VEC_INT_SUB;
+         goto Iop_VV_wrk;
+      case Iop_Sub16x8:
+         size = 2;
+         vec_op = S390_VEC_INT_SUB;
+         goto Iop_VV_wrk;
+      case Iop_Sub32x4:
+         size = 4;
+         vec_op = S390_VEC_INT_SUB;
+         goto Iop_VV_wrk;
+      case Iop_Sub64x2:
+         size = 8;
+         vec_op = S390_VEC_INT_SUB;
+         goto Iop_VV_wrk;
+
+      case Iop_Sub128x1:
+         size = 16;
+         vec_op = S390_VEC_INT_SUB;
+         goto Iop_VV_wrk;
+
+      case Iop_OrV128:
+         vec_op = S390_VEC_OR;
+         goto Iop_VV_wrk;
+
+      case Iop_XorV128:
+         vec_op = S390_VEC_XOR;
+         goto Iop_VV_wrk;
+
+      case Iop_AndV128:
+         vec_op = S390_VEC_AND;
+         goto Iop_VV_wrk;
+
+      case Iop_CmpEQ8x16:
+         size = 1;
+         goto Iop_CmpEQ_wrk;
+      case Iop_CmpEQ16x8:
+         size = 2;
+         goto Iop_CmpEQ_wrk;
+      case Iop_CmpEQ32x4:
+         size = 4;
+         goto Iop_CmpEQ_wrk;
+      case Iop_CmpEQ64x2:
+         size = 8;
+
+         Iop_CmpEQ_wrk: {
+            reg1 = s390_isel_vec_expr(env, arg1);
+            reg2 = s390_isel_vec_expr(env, arg2);
+
+            addInstr(env, s390_insn_vec_binop(size, S390_VEC_COMPARE_EQUAL,
+                     dst, reg1, reg2));
+
+            return vec_do_notV128(env, dst);
+         }
+
+      case Iop_Max8Ux16:
+         size = 1;
+         vec_op = S390_VEC_MAXU;
+         goto Iop_VV_wrk;
+      case Iop_Max8Sx16:
+         size = 1;
+         vec_op = S390_VEC_MAXS;
+         goto Iop_VV_wrk;
+      case Iop_Max16Ux8:
+         size = 2;
+         vec_op = S390_VEC_MAXU;
+         goto Iop_VV_wrk;
+      case Iop_Max16Sx8:
+         size = 2;
+         vec_op = S390_VEC_MAXS;
+         goto Iop_VV_wrk;
+      case Iop_Max32Ux4:
+         size = 4;
+         vec_op = S390_VEC_MAXU;
+         goto Iop_VV_wrk;
+      case Iop_Max32Sx4:
+         size = 4;
+         vec_op = S390_VEC_MAXS;
+         goto Iop_VV_wrk;
+      case Iop_Max64Ux2:
+         size = 8;
+         vec_op = S390_VEC_MAXU;
+         goto Iop_VV_wrk;
+      case Iop_Max64Sx2:
+         size = 8;
+         vec_op = S390_VEC_MAXS;
+         goto Iop_VV_wrk;
+
+      case Iop_Min8Ux16:
+         size = 1;
+         vec_op = S390_VEC_MINU;
+         goto Iop_VV_wrk;
+      case Iop_Min8Sx16:
+         size = 1;
+         vec_op = S390_VEC_MINS;
+         goto Iop_VV_wrk;
+      case Iop_Min16Ux8:
+         size = 2;
+         vec_op = S390_VEC_MINU;
+         goto Iop_VV_wrk;
+      case Iop_Min16Sx8:
+         size = 2;
+         vec_op = S390_VEC_MINS;
+         goto Iop_VV_wrk;
+      case Iop_Min32Ux4:
+         size = 4;
+         vec_op = S390_VEC_MINU;
+         goto Iop_VV_wrk;
+      case Iop_Min32Sx4:
+         size = 4;
+         vec_op = S390_VEC_MINS;
+         goto Iop_VV_wrk;
+      case Iop_Min64Ux2:
+         size = 8;
+         vec_op = S390_VEC_MINU;
+         goto Iop_VV_wrk;
+      case Iop_Min64Sx2:
+         size = 8;
+         vec_op = S390_VEC_MINS;
+         goto Iop_VV_wrk;
+
+      case Iop_Avg8Ux16:
+         size = 1;
+         vec_op = S390_VEC_AVGU;
+         goto Iop_VV_wrk;
+      case Iop_Avg8Sx16:
+         size = 1;
+         vec_op = S390_VEC_AVGS;
+         goto Iop_VV_wrk;
+      case Iop_Avg16Ux8:
+         size = 2;
+         vec_op = S390_VEC_AVGU;
+         goto Iop_VV_wrk;
+      case Iop_Avg16Sx8:
+         size = 2;
+         vec_op = S390_VEC_AVGS;
+         goto Iop_VV_wrk;
+      case Iop_Avg32Ux4:
+         size = 4;
+         vec_op = S390_VEC_AVGU;
+         goto Iop_VV_wrk;
+      case Iop_Avg32Sx4:
+         size = 4;
+         vec_op = S390_VEC_AVGS;
+         goto Iop_VV_wrk;
+      case Iop_Avg64Ux2:
+         size = 8;
+         vec_op = S390_VEC_AVGU;
+         goto Iop_VV_wrk;
+      case Iop_Avg64Sx2:
+         size = 8;
+         vec_op = S390_VEC_AVGS;
+         goto Iop_VV_wrk;
+
+      case Iop_QNarrowBin16Uto8Ux16:
+         size = 2;
+         vec_op = S390_VEC_PACK_SATURU;
+         goto Iop_VV_wrk;
+      case Iop_QNarrowBin16Sto8Sx16:
+         size = 2;
+         vec_op = S390_VEC_PACK_SATURS;
+         goto Iop_VV_wrk;
+      case Iop_QNarrowBin32Uto16Ux8:
+         size = 4;
+         vec_op = S390_VEC_PACK_SATURU;
+         goto Iop_VV_wrk;
+      case Iop_QNarrowBin32Sto16Sx8:
+         size = 4;
+         vec_op = S390_VEC_PACK_SATURS;
+         goto Iop_VV_wrk;
+      case Iop_QNarrowBin64Uto32Ux4:
+         size = 8;
+         vec_op = S390_VEC_PACK_SATURU;
+         goto Iop_VV_wrk;
+      case Iop_QNarrowBin64Sto32Sx4:
+         size = 8;
+         vec_op = S390_VEC_PACK_SATURS;
+         goto Iop_VV_wrk;
+
+      case Iop_NarrowBin16to8x16:
+         size = 2;
+         vec_op = S390_VEC_PACK;
+         goto Iop_VV_wrk;
+      case Iop_NarrowBin32to16x8:
+         size = 4;
+         vec_op = S390_VEC_PACK;
+         goto Iop_VV_wrk;
+      case Iop_NarrowBin64to32x4:
+         size = 8;
+         vec_op = S390_VEC_PACK;
+         goto Iop_VV_wrk;
+
+      case Iop_CmpGT8Ux16:
+         size = 1;
+         vec_op = S390_VEC_COMPARE_GREATERU;
+         goto Iop_VV_wrk;
+      case Iop_CmpGT8Sx16:
+         size = 1;
+         vec_op = S390_VEC_COMPARE_GREATERS;
+         goto Iop_VV_wrk;
+      case Iop_CmpGT16Ux8:
+         size = 2;
+         vec_op = S390_VEC_COMPARE_GREATERU;
+         goto Iop_VV_wrk;
+      case Iop_CmpGT16Sx8:
+         size = 2;
+         vec_op = S390_VEC_COMPARE_GREATERS;
+         goto Iop_VV_wrk;
+      case Iop_CmpGT32Ux4:
+         size = 4;
+         vec_op = S390_VEC_COMPARE_GREATERU;
+         goto Iop_VV_wrk;
+      case Iop_CmpGT32Sx4:
+         size = 4;
+         vec_op = S390_VEC_COMPARE_GREATERS;
+         goto Iop_VV_wrk;
+      case Iop_CmpGT64Ux2:
+         size = 8;
+         vec_op = S390_VEC_COMPARE_GREATERU;
+         goto Iop_VV_wrk;
+      case Iop_CmpGT64Sx2:
+         size = 8;
+         vec_op = S390_VEC_COMPARE_GREATERS;
+         goto Iop_VV_wrk;
+
+      case Iop_MulHi8Ux16:
+         size = 1;
+         vec_op = S390_VEC_INT_MUL_HIGHU;
+         goto Iop_VV_wrk;
+      case Iop_MulHi8Sx16:
+         size = 1;
+         vec_op = S390_VEC_INT_MUL_HIGHS;
+         goto Iop_VV_wrk;
+      case Iop_MulHi16Ux8:
+         size = 2;
+         vec_op = S390_VEC_INT_MUL_HIGHU;
+         goto Iop_VV_wrk;
+      case Iop_MulHi16Sx8:
+         size = 2;
+         vec_op = S390_VEC_INT_MUL_HIGHS;
+         goto Iop_VV_wrk;
+      case Iop_MulHi32Ux4:
+         size = 4;
+         vec_op = S390_VEC_INT_MUL_HIGHU;
+         goto Iop_VV_wrk;
+      case Iop_MulHi32Sx4:
+         size = 4;
+         vec_op = S390_VEC_INT_MUL_HIGHS;
+         goto Iop_VV_wrk;
+
+      case Iop_Mul8x16:
+         size = 1;
+         vec_op = S390_VEC_INT_MUL_LOW;
+         goto Iop_VV_wrk;
+      case Iop_Mul16x8:
+         size = 2;
+         vec_op = S390_VEC_INT_MUL_LOW;
+         goto Iop_VV_wrk;
+      case Iop_Mul32x4:
+         size = 4;
+         vec_op = S390_VEC_INT_MUL_LOW;
+         goto Iop_VV_wrk;
+
+      case Iop_MullEven8Sx16:
+         size = 1;
+         vec_op = S390_VEC_INT_MUL_EVENS;
+         goto Iop_VV_wrk;
+      case Iop_MullEven8Ux16:
+         size = 1;
+         vec_op = S390_VEC_INT_MUL_EVENU;
+         goto Iop_VV_wrk;
+      case Iop_MullEven16Sx8:
+         size = 2;
+         vec_op = S390_VEC_INT_MUL_EVENS;
+         goto Iop_VV_wrk;
+      case Iop_MullEven16Ux8:
+         size = 2;
+         vec_op = S390_VEC_INT_MUL_EVENU;
+         goto Iop_VV_wrk;
+      case Iop_MullEven32Sx4:
+         size = 4;
+         vec_op = S390_VEC_INT_MUL_EVENS;
+         goto Iop_VV_wrk;
+      case Iop_MullEven32Ux4:
+         size = 4;
+         vec_op = S390_VEC_INT_MUL_EVENU;
+         goto Iop_VV_wrk;
+
+      case Iop_ShlN8x16:
+         size = 1;
+         vec_op = S390_VEC_ELEMENT_SHIFT_LEFT;
+         goto Iop_Shift_wrk;
+      case Iop_ShlN16x8:
+         size = 2;
+         vec_op = S390_VEC_ELEMENT_SHIFT_LEFT;
+         goto Iop_Shift_wrk;
+      case Iop_ShlN32x4:
+         size = 4;
+         vec_op = S390_VEC_ELEMENT_SHIFT_LEFT;
+         goto Iop_Shift_wrk;
+      case Iop_ShlN64x2:
+         size = 8;
+         vec_op = S390_VEC_ELEMENT_SHIFT_LEFT;
+         goto Iop_Shift_wrk;
+
+      case Iop_SarN8x16:
+         size = 1;
+         vec_op = S390_VEC_ELEMENT_SHIFT_RIGHT_ARITHMETIC;
+         goto Iop_Shift_wrk;
+      case Iop_SarN16x8:
+         size = 2;
+         vec_op = S390_VEC_ELEMENT_SHIFT_RIGHT_ARITHMETIC;
+         goto Iop_Shift_wrk;
+      case Iop_SarN32x4:
+         size = 4;
+         vec_op = S390_VEC_ELEMENT_SHIFT_RIGHT_ARITHMETIC;
+         goto Iop_Shift_wrk;
+      case Iop_SarN64x2:
+         size = 8;
+         vec_op = S390_VEC_ELEMENT_SHIFT_RIGHT_ARITHMETIC;
+         goto Iop_Shift_wrk;
+
+         Iop_Shift_wrk: {
+            reg1 = s390_isel_vec_expr(env, arg1);
+            HReg secondArg = s390_isel_int_expr(env, arg2);
+            reg2 = newVRegV(env);
+            addInstr(env,
+               s390_insn_unop(size, S390_VEC_DUPLICATE, reg2, s390_opnd_reg(secondArg))
+               );
+            addInstr(env, s390_insn_vec_binop(size, vec_op,
+                     dst, reg1, reg2));
+
+         return dst;
+         }
+
+      Iop_VV_wrk: {
+         reg1 = s390_isel_vec_expr(env, arg1);
+         reg2 = s390_isel_vec_expr(env, arg2);
+
+         addInstr(env, s390_insn_vec_binop(size, vec_op,
+                  dst, reg1, reg2));
+
+         return dst;
+}
+      default:
+         goto irreducible;
+      }
+   }
+
+      /* --------- TERNARY OP --------- */
+   case Iex_Triop: {
+      HReg dst = newVRegV(env);
+      s390_amode* amode2;
+      HReg reg1, reg2, reg3;
+      IROp op = expr->Iex.Triop.details->op;
+      IRExpr* arg1 = expr->Iex.Triop.details->arg1;
+      IRExpr* arg2 = expr->Iex.Triop.details->arg2;
+      IRExpr* arg3 = expr->Iex.Triop.details->arg3;
+      switch (op) {
+      case Iop_SetElem8x16:
+         size = 1;
+         goto Iop_SetElem_wrk;
+      case Iop_SetElem16x8:
+         size = 2;
+         goto Iop_SetElem_wrk;
+      case Iop_SetElem32x4:
+         size = 4;
+         goto Iop_SetElem_wrk;
+      case Iop_SetElem64x2: {
+         size = 8;
+
+         Iop_SetElem_wrk:{
+            reg1 = s390_isel_vec_expr(env, arg1);
+            amode2 = s390_isel_amode(env, IRExpr_Unop(Iop_8Uto64, arg2));
+            reg3 = s390_isel_int_expr(env, arg3);
+
+            addInstr(env, s390_insn_move(16, dst, reg1));
+            addInstr(env, s390_insn_vec_amodeintop(size, S390_VEC_SET_ELEM,
+                     dst, amode2, reg3));
+            return dst;
+         }
+      }
+
+      case Iop_Perm8x16x2:
+         size = 16;
+         reg1 = s390_isel_vec_expr(env, arg1);
+         reg2 = s390_isel_vec_expr(env, arg2);
+         reg3 = s390_isel_vec_expr(env, arg3);
+
+         addInstr(env, s390_insn_vec_triop(size, S390_VEC_PERM,
+                                           dst, reg1, reg2, reg3));
+         return dst;
+      default:
+         goto irreducible;
+      }
+   }
+
+   default:
+      goto irreducible;
+   }
+
+   /* We get here if no pattern matched. */
+ irreducible:
+   ppIRExpr(expr);
+   vpanic("s390_isel_vec_expr: cannot reduce tree");
+}
+
+static HReg
+s390_isel_vec_expr(ISelEnv *env, IRExpr *expr)
+{
+   HReg dst = s390_isel_vec_expr_wrk(env, expr);
+
+   /* Sanity checks ... */
+   vassert(hregClass(dst) == HRcVec128);
+   vassert(hregIsVirtual(dst));
+
+   return dst;
+}
+
+
+/*---------------------------------------------------------*/
 /*--- ISEL: Statements                                  ---*/
 /*---------------------------------------------------------*/
 
@@ -3572,6 +4347,9 @@ s390_isel_stmt(ISelEnv *env, IRStmt *stmt)
          /* Cannot occur. No such instruction */
          vpanic("Ist_Store with 128-bit floating point data");
 
+      case Ity_V128:
+         src = s390_isel_vec_expr(env, stmt->Ist.Store.data);
+         break;
       default:
          goto stmt_fail;
       }
@@ -3718,6 +4496,9 @@ no_memcpy_put:
          src = s390_isel_dfp_expr(env, stmt->Ist.Put.data);
          break;
 
+      case Ity_V128:
+         src = s390_isel_vec_expr(env, stmt->Ist.Put.data);
+         break;
       default:
          goto stmt_fail;
       }
@@ -3793,6 +4574,11 @@ no_memcpy_put:
          return;
       }
 
+      case Ity_V128:
+         src = s390_isel_vec_expr(env, stmt->Ist.WrTmp.data);
+         dst = lookupIRTemp(env, tmp);
+         break;
+
       default:
          goto stmt_fail;
       }
@@ -3837,7 +4623,7 @@ no_memcpy_put:
 
       retty = typeOfIRTemp(env->type_env, d->tmp);
       if (retty == Ity_I64 || retty == Ity_I32
-          || retty == Ity_I16 || retty == Ity_I8) {
+          || retty == Ity_I16 || retty == Ity_I8 || retty == Ity_V128) {
          /* Move the returned value to the destination register */
          HReg ret = make_gpr(S390_REGNO_RETURN_VALUE);
 
@@ -3845,10 +4631,28 @@ no_memcpy_put:
          doHelperCall(&addToSp, &rloc, env, d->guard,  d->cee, retty,
                       d->args);
          vassert(is_sane_RetLoc(rloc));
-         vassert(rloc.pri == RLPri_Int);
-         vassert(addToSp == 0);
-         addInstr(env, s390_insn_move(sizeof(ULong), dst, ret));
 
+         switch(retty)
+         {
+            case Ity_I64: case Ity_I32: case Ity_I16: case Ity_I8:
+               vassert(rloc.pri == RLPri_Int);
+               vassert(addToSp == 0);
+               addInstr(env, s390_insn_move(sizeof(ULong), dst, ret));
+               break;
+            case Ity_V128:
+               /* The returned value is on the stack, and rloc.spOff
+                  tells us where.  Fish it off the stack and then move
+                  the stack pointer upwards to clear it, as directed by
+                  doHelperCall. */
+               vassert(rloc.pri == RLPri_V128SpRel);
+               vassert(addToSp == sizeof(V128));
+               s390_amode* am  = s390_amode_b12(rloc.spOff, s390_hreg_stack_pointer());
+               addInstr(env, s390_insn_load(sizeof(V128), dst, am));
+               add_to_SP(env, addToSp);
+               break;
+            default:
+               vpanic("s390_isel_stmt: invalid return type from dirty helper");
+         }
          return;
       }
       break;
@@ -4174,7 +4978,10 @@ iselSB_S390(const IRSB *bb, VexArch arch_host, const VexArchInfo *archinfo_host,
          hregHI = mkVRegF(j++);
          break;
 
-      case Ity_V128: /* fall through */
+      case Ity_V128:
+         hreg   = mkVRegV(j++);
+         break;
+
       default:
          ppIRType(bb->tyenv->types[i]);
          vpanic("iselSB_S390: IRTemp type");
