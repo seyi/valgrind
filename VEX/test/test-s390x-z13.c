@@ -363,6 +363,34 @@ static void test_all_lcbb() {
    test_range(tested, 0, 64, lcbb0_cc);
 }
 
+/* The problem with this test is different results on different architectures.
+   E.g. z13 will return (1 << 0)|(1 << 3) value while more recent versions of CPU
+   can (and will!) add their own operations here. Anyway z13 or any later arch will
+   have "SHA-512-DRNG" (3-rd bit of result) and "Query" (0-th bit) functions
+   so we test only this bits and ignore others.
+*/
+static bool test_ppno_query() {
+   uint32_t output[4];
+   register uint64_t functionCode __asm__("0") = 0ULL;
+   register uint64_t paramBlock __asm__("1") = (uint64_t) &output;
+
+   __asm__ volatile (
+         "ppno %%r2, %%r4" // GPR's are ignored here
+         : "+d"(functionCode), "+d"(paramBlock)
+         :
+         : "cc", "memory"
+      );
+
+   /* 0x9 = (1 << 0)|(1 << 3), see explanation above */
+   uint32_t expected = 0x90000000U;
+   uint32_t after = output[0];
+   SMART_RETURN_R64(ppno_query);
+}
+
+static void test_all_ppno() {
+   test(ppno_query);
+}
+
 void test_long_all() {
    uint64_t unsigned64bit = 0;
 
@@ -373,6 +401,7 @@ void test_long_all() {
    test_all_locfh();
    test_all_lzr();
    test_each(uint64, unsigned64bit, llzrgf);
+   test_all_ppno();
 }
 
 #define SHORT_TESTS_UNSIGNED_FROM 0
@@ -424,6 +453,7 @@ void test_short_all() {
    test_range(signed32bit, SHORT_TESTS_SIGNED_FROM, SHORT_TESTS_TO, locghil);
 
    test_all_lcbb(); /* These test is not long, so we can run it on all range */
+   test_all_ppno();
 }
 
 int main(int argc, char *argv[]) {
