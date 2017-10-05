@@ -343,6 +343,7 @@ s390x_dirtyhelper_STFLE(VexGuestS390XState *guest_state, ULong *addr)
    s390_set_facility_bit(addr, S390_FAC_GIE,    1);
    s390_set_facility_bit(addr, S390_FAC_EXEXT,  1);
    s390_set_facility_bit(addr, S390_FAC_HIGHW,  1);
+   s390_set_facility_bit(addr, S390_FAC_LSC2,   1);
 
    s390_set_facility_bit(addr, S390_FAC_HFPMAS, 0);
    s390_set_facility_bit(addr, S390_FAC_HFPUNX, 0);
@@ -803,7 +804,7 @@ s390_do_cu12_cu14_helper2(UInt byte1, UInt byte2, UInt byte3, UInt byte4,
       UInt ij     = (byte3 >> 4) & 0x3;
       UInt klmn   = byte3 & 0xf;
       UInt opqrst = byte4 & 0x3f;
-      
+
       if (is_cu12) {
          UInt abcd = (uvwxy - 1) & 0xf;
          UInt high_surrogate = (0xd8 << 8) | (abcd << 6) | (efgh << 2) | ij;
