@@ -292,6 +292,25 @@ declare_load_count_to_block_boundary(4)
 declare_load_count_to_block_boundary(5)
 declare_load_count_to_block_boundary(6)
 
+static bool test_lcbb0_cc(const uint32_t testedValue) {
+   const size_t boundary = 64;
+   const uint32_t *testedPointer =
+       (uint32_t *)(boundary -
+                    ((testedValue < boundary) ? testedValue : 0));
+   uint32_t expectedForLCBB = boundary - ((size_t)testedPointer % boundary);
+
+   uint32_t after = 0;
+   uint32_t expected = (expectedForLCBB >= 16) ? 0 : 3;
+   __asm__ volatile("lcbb %[cc], %[testedPointer], 0 \n"
+		    "ipm %[cc] \n"
+		    "srl %[cc], 28 \n"
+                    : [cc] "=d"(after)
+                    : [testedPointer] "m"(*testedPointer)
+		    : "cc");
+   SMART_RETURN_R64(lcbb0_cc)
+   }
+
+
 static void test_all_lzr() {
    uint32_t unsigned32bit = 0;
 
@@ -341,6 +360,7 @@ static void test_all_lcbb() {
    test_range(tested, 0, 1024, lcbb4);
    test_range(tested, 0, 2048, lcbb5);
    test_range(tested, 0, 4096, lcbb6);
+   test_range(tested, 0, 64, lcbb0_cc);
 }
 
 void test_long_all() {
