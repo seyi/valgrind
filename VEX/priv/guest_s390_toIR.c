@@ -14292,8 +14292,12 @@ s390_irgen_STOCFH(UChar r1, IRTemp op2addr)
 static const HChar *
 s390_irgen_LCBB(UChar r1, IRTemp op2addr, UChar m3)
 {
-   IRExpr* op2 = s390_getCountToBlockBoundary(op2addr, m3);
-   put_gpr_w1(r1, op2);
+   IRTemp op2 = newTemp(Ity_I32);
+   assign(op2, s390_getCountToBlockBoundary(op2addr, m3));
+   put_gpr_w1(r1, mkexpr(op2));
+
+   IRExpr* cc = mkite(binop(Iop_CmpEQ32, mkexpr(op2), mkU32(16)), mkU64(0), mkU64(3));
+   s390_cc_thunk_fill(mkU64(S390_CC_OP_SET), cc, mkU64(0), mkU64(0));
 
    return "lcbb";
 }
