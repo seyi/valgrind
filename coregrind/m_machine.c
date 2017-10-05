@@ -6,7 +6,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2017 Julian Seward 
+   Copyright (C) 2000-2017 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -133,7 +133,7 @@ void VG_(get_UnwindStartRegs) ( /*OUT*/UnwindStartRegs* regs,
 }
 
 void
-VG_(get_shadow_regs_area) ( ThreadId tid, 
+VG_(get_shadow_regs_area) ( ThreadId tid,
                             /*DST*/UChar* dst,
                             /*SRC*/Int shadowNo, PtrdiffT offset, SizeT size )
 {
@@ -157,7 +157,7 @@ VG_(get_shadow_regs_area) ( ThreadId tid,
 }
 
 void
-VG_(set_shadow_regs_area) ( ThreadId tid, 
+VG_(set_shadow_regs_area) ( ThreadId tid,
                             /*DST*/Int shadowNo, PtrdiffT offset, SizeT size,
                             /*SRC*/const UChar* src )
 {
@@ -370,7 +370,7 @@ void VG_(thread_stack_reset_iter)(/*OUT*/ThreadId* tid)
 }
 
 Bool VG_(thread_stack_next)(/*MOD*/ThreadId* tid,
-                            /*OUT*/Addr* stack_min, 
+                            /*OUT*/Addr* stack_min,
                             /*OUT*/Addr* stack_max)
 {
    ThreadId i;
@@ -638,7 +638,7 @@ static UInt VG_(get_machine_model)(void)
 
 #if defined(VGA_mips32) || defined(VGA_mips64)
 
-/* 
+/*
  * Initialize hwcaps by parsing /proc/cpuinfo . Returns False if it can not
  * determine what CPU it is (it searches only for the models that are or may be
  * supported by Valgrind).
@@ -1393,7 +1393,7 @@ Bool VG_(machine_get_hwcaps)( void )
      Int i, r, model;
 
      /* If the model is "unknown" don't treat this as an error. Assume
-        this is a brand-new machine model for which we don't have the 
+        this is a brand-new machine model for which we don't have the
         identification yet. Keeping fingers crossed. */
      model = VG_(get_machine_model)();
 
@@ -1486,6 +1486,7 @@ Bool VG_(machine_get_hwcaps)( void )
         { False, S390_FAC_FPEXT, VEX_HWCAPS_S390X_FPEXT, "FPEXT" },
         { False, S390_FAC_LSC,   VEX_HWCAPS_S390X_LSC,   "LSC"   },
         { False, S390_FAC_PFPO,  VEX_HWCAPS_S390X_PFPO,  "PFPO"  },
+        { False, S390_FAC_LSC2,  VEX_HWCAPS_S390X_LSC2,  "LSC2"  },
      };
 
      /* Set hwcaps according to the detected facilities */

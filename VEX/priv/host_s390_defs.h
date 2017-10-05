@@ -470,7 +470,7 @@ typedef struct {
          in a register pair cannot be chosen independently it would suffice
          to store only one register of the pair in order to represent it.
          We chose not to do that as being explicit about all registers
-         helps with debugging and does not require special handling in 
+         helps with debugging and does not require special handling in
          e.g. s390_insn_get_reg_usage, It'd be all too easy to forget about
          the "other" register in a pair if it is implicit.
 
@@ -800,7 +800,8 @@ extern UInt s390_host_hwcaps;
                       (s390_host_hwcaps & (VEX_HWCAPS_S390X_LSC))
 #define s390_host_has_pfpo \
                       (s390_host_hwcaps & (VEX_HWCAPS_S390X_PFPO))
-
+#define s390_host_has_lsc2 \
+                      (s390_host_hwcaps & (VEX_HWCAPS_S390X_LSC2))
 #endif /* ndef __VEX_HOST_S390_DEFS_H */
 
 /*---------------------------------------------------------------*/
