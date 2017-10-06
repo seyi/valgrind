@@ -234,6 +234,10 @@ static int go(char *feature, char *cpu)
       match = facilities & FAC_BIT(44);
    } else if (strcmp(feature, "s390x-highw") == 0 ) {
       match = facilities & FAC_BIT(45);
+   } else if (strcmp(feature, "s390x-loc2") == 0 ) {
+      match = facilities & FAC_BIT(53); /* load/store on condition 2 facility */
+   } else if (strcmp(feature, "s390x-msa5") == 0 ) {
+      match = facilities & FAC_BIT(57); /* message security assist 5 facility */
    } else {
       return 2;          // Unrecognised feature.
    }
@@ -320,7 +324,7 @@ int main(int argc, char **argv)
    }
 
    rc = go(argv[1], argv[2]);
-   
+
    if (inverted) {
       switch (rc) {
       case 0: rc = 1; break;
