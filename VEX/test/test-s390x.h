@@ -11,6 +11,10 @@
 #   define RED "\033[31m"
 #   define GREEN "\033[32m"
 #   define RESET "\033[0m"
+#else
+#   define RED
+#   define GREEN
+#   define RESET
 #endif
 
 #define printPassed(insn) \
