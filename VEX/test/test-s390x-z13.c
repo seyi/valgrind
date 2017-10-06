@@ -375,7 +375,7 @@ static bool test_ppno_query() {
    register uint64_t paramBlock __asm__("1") = (uint64_t) &output;
 
    __asm__ volatile (
-         "ppno %%r2, %%r4" // GPR's are ignored here
+         "ppno %%r2, %%r4 \n" // GPR's are ignored here
          : "+d"(functionCode), "+d"(paramBlock)
          :
          : "cc", "memory"
@@ -387,8 +387,62 @@ static bool test_ppno_query() {
    SMART_RETURN_R64(ppno_query);
 }
 
+static bool test_ppno_sha512() {
+   size_t index = 0;
+   uint8_t  block[240];
+   /* Important! The program should zero paramBlock for seeding. */
+   memset(block, 0 , sizeof(block));
+
+   /* Don't forget to update expected after changing seed */
+   const char seed[] = "May the Force be with you";
+   const uint64_t seedLength = sizeof(seed);
+   uint8_t hash[64];
+
+   register uint64_t functionCode __asm__("0") = 0x83ULL;
+   register uint64_t paramBlock __asm__("1") = (uint64_t) &block;
+   register uint64_t gpr2 __asm__("2") = (uint64_t) &seed;
+   register uint64_t gpr3 __asm__("3") = seedLength;
+   __asm__ volatile (
+         "ppno %%r2, %%r2 \n"
+         : "+d"(functionCode), "+d"(paramBlock), "+d"(gpr2), "+d"(gpr3)
+         :
+         : "cc", "memory"
+      );
+
+   functionCode = 3ULL;
+   paramBlock = (uint64_t) &block;
+   gpr2 = (uint64_t) &hash;
+   gpr3 = 1 * sizeof(hash); /* exactly one hash to generate*/
+   __asm__ volatile (
+         "ppno %%r2, %%r2 \n"
+         : "+d"(functionCode), "+d"(paramBlock), "+d"(gpr2), "+d"(gpr3)
+         :
+         : "cc", "memory"
+      );
+
+   const uint8_t expected[] = {0x13, 0xd7, 0x33, 0x6a, 0x4c, 0xbc, 0x37, 0x28,
+                               0xf7, 0xab, 0xe5, 0x8a, 0xff, 0x28, 0x29, 0xff,
+                               0x44, 0x8b, 0x53, 0x39, 0x76, 0x09, 0xb3, 0x0c,
+                               0x37, 0x36, 0xf5, 0xb7, 0xb2, 0xe9, 0x75, 0xcb,
+                               0x2d, 0x76, 0x8a, 0xe3, 0x89, 0x61, 0x79, 0xd8,
+                               0x1f, 0x0d, 0x12, 0x9f, 0xf3, 0xff, 0x03, 0x2b,
+                               0x1b, 0x52, 0x8f, 0x09, 0x6c, 0xab, 0xc8, 0xcd,
+                               0x39, 0x2e, 0x75, 0x24, 0xd5, 0xdd, 0x7d, 0x57};
+   bool result = memcmp(hash, expected, 64) == 0;
+   if(!result) {
+      printf("[ERROR]: ppno_sha512\n");
+      printf("after:");
+      for(index = 0; index < 64; index++)
+         printf("%x\n", hash[index]);
+      printf("Check source file for expected\n");
+      printf("\n");
+   }
+   return result;
+}
+
 static void test_all_ppno() {
    test(ppno_query);
+   test(ppno_sha512);
 }
 
 void test_long_all() {
