@@ -228,9 +228,9 @@ s390_amode_bx20(Int d, HReg b, HReg x)
 }
 
 
-/* Construct an AMODE for accessing the guest state at OFFSET. 
+/* Construct an AMODE for accessing the guest state at OFFSET.
    OFFSET can be at most 3 * sizeof(VexGuestS390XState) + LibVEX_N_SPILL_BYTES
-   which may be too large for a B12 addressing mode. 
+   which may be too large for a B12 addressing mode.
    Use a B20 amode as a fallback which will be safe for any offset.
 */
 s390_amode *
@@ -384,7 +384,7 @@ getRRegUniverse_S390(void)
    static RRegUniverse all_regs;
    static Bool initialised = False;
    RRegUniverse *ru = &all_regs;
-   
+
    if (LIKELY(initialised))
       return ru;
 
@@ -445,7 +445,7 @@ getRRegUniverse_S390(void)
       vassert(gpr_index[i] >= 0);
    for (UInt i = 0; i < sizeof fpr_index / sizeof fpr_index[0]; ++i)
       vassert(fpr_index[i] >= 0);
-                 
+
    initialised = True;
    return ru;
 }
@@ -7450,7 +7450,7 @@ s390_insn_alu_emit(UChar *buf, const s390_insn *insn)
             thusly dst != 15. */
          vassert(dst != 15);  /* extra paranoia */
          b2 = (dst + 1) % 16;
-         
+
          buf = s390_emit_LGR(buf, R0, b2);  /* save */
 
          /* Loading SRC to B2 does not modify R0. */
@@ -8679,36 +8679,37 @@ s390_insn_helper_call_emit(UChar *buf, const s390_insn *insn)
 {
    s390_cc_t cond;
    ULong target;
-   UChar *ptmp = buf;
+   Int delta;
    s390_helper_call *helper_call = insn->variant.helper_call.details;
 
    cond = helper_call->cond;
    target = helper_call->target;
 
-   if (cond != S390_CC_ALWAYS
-       && helper_call->rloc.pri != RLPri_None) {
-      /* The call might not happen (it isn't unconditional) and it
-         returns a result.  In this case we will need to generate a
-         control flow diamond to put 0x555..555 in the return
-         register(s) in the case where the call doesn't happen.  If
-         this ever becomes necessary, maybe copy code from the ARM
-         equivalent.  Until that day, just give up. */
-      return buf; /* To denote failure. */
-   }
+   const Bool not_always = (cond != S390_CC_ALWAYS);
+   const Bool not_void_return = (helper_call->rloc.pri != RLPri_None);
 
-   if (cond != S390_CC_ALWAYS) {
-      /* So we have something like this
-         if (cond) call X;
-         Y: ...
-         We convert this into
-         if (! cond) goto Y;        // BRC opcode; 4 bytes
-         call X;
-         Y:
-      */
+   /* We have this situation:
+      ( *** code in this braces is for  not_always && not_void_return*** )
+         ...
+         before:
+           brc{!cond} else
+           call_helper
+         preElse:
+         ***  brc{ALWAYS} after ***
+         else:
+         *** load_64imm $0x5555555555555555, %%r2  *** // e.g. for Int RetLoc
+         after:
+         ...
+   */
+
+   // before:
+   UChar *pBefore = buf;
+   if (not_always) {
       /* 4 bytes (a BRC insn) to be filled in here */
       buf += 4;
    }
 
+   // call_helper
    /* Load the target address into a register, that
       (a) is not used for passing parameters to the helper and
       (b) can be clobbered by the callee
@@ -8726,12 +8727,45 @@ s390_insn_helper_call_emit(UChar *buf, const s390_insn *insn)
    buf = s390_emit_LFPC(buf, S390_REGNO_STACK_POINTER,          // restore FPC
                         S390_OFFSET_SAVED_FPC_C);
 
-   if (cond != S390_CC_ALWAYS) {
-      Int delta = buf - ptmp;
+   // preElse:
+   UChar* pPreElse = buf;
+   if (not_always && not_void_return) {
+      /* 4 bytes (a BRC insn) to be filled in here */
+      buf += 4;
+   }
 
+   // else:
+   UChar* pElse = buf;
+   if (not_always && not_void_return) {
+      switch (helper_call->rloc.pri) {
+      case RLPri_Int:
+         buf = s390_emit_load_64imm(buf, S390_REGNO_RETURN_VALUE, 0x5555555555555555ULL);
+         break;
+      default:
+         ppS390Instr(insn, True);
+         vpanic("s390_insn_helper_call_emit: invalid conditional RetLoc.");
+      }
+   }
+
+   // after:
+   UChar* pAfter = buf;
+
+   // fill "brc{!cond} else"
+   if(not_always)
+   {
+      delta = pElse - pBefore;
       delta >>= 1;  /* immediate constant is #half-words */
       vassert(delta > 0 && delta < (1 << 16));
-      s390_emit_BRC(ptmp, s390_cc_invert(cond), delta);
+      s390_emit_BRC(pBefore, s390_cc_invert(cond), delta);
+   }
+
+   // fill "brc{ALWAYS} after"
+   if (not_always && not_void_return)
+   {
+      delta = pAfter - pPreElse;
+      delta >>= 1;  /* immediate constant is #half-words */
+      vassert(delta > 0 && delta < (1 << 16));
+      s390_emit_BRC(pPreElse, S390_CC_ALWAYS, delta);
    }
 
    return buf;
@@ -9364,7 +9398,7 @@ s390_insn_mimm_emit(UChar *buf, const s390_insn *insn)
          return s390_emit_STG(buf, R0, 0, b, DISP20(d));
       }
    }
-   
+
    vpanic("s390_insn_mimm_emit");
 }
 
@@ -9601,7 +9635,7 @@ s390_insn_xdirect_emit(UChar *buf, const s390_insn *insn,
    const void *disp_cp_chain_me;
 
    disp_cp_chain_me =
-      insn->variant.xdirect.to_fast_entry ? disp_cp_chain_me_to_fastEP 
+      insn->variant.xdirect.to_fast_entry ? disp_cp_chain_me_to_fastEP
                                           : disp_cp_chain_me_to_slowEP;
    /* Get the address of the beginning of the load64 code sequence into %r1.
       Do not change the register! This is part of the protocol with the
@@ -9750,7 +9784,7 @@ s390_insn_xassisted_emit(UChar *buf, const s390_insn *insn,
    case Ijk_Ret:
    case Ijk_Call:
       /* fallthrough */
-   default: 
+   default:
       ppIRJumpKind(insn->variant.xassisted.kind);
       vpanic("s390_insn_xassisted_emit: unexpected jump kind");
    }
@@ -9823,7 +9857,7 @@ s390_insn_evcheck_emit(UChar *buf, const s390_insn *insn,
    buf = s390_emit_BCR(buf, S390_CC_ALWAYS, S390_REGNO_TCHAIN_SCRATCH);  /* 2 bytes */
 
    code_end = buf;
-   
+
    /* Make sure the size of the generated code is identical to the size
       returned by evCheckSzB_S390 */
    vassert(evCheckSzB_S390() == code_end - code_begin);
@@ -10108,7 +10142,7 @@ chainXDirect_S390(VexEndness endness_host,
 
       In both cases the replacement has the same length as the original.
       To remain sane & verifiable,
-      (1) limit the displacement for the short form to 
+      (1) limit the displacement for the short form to
           (say) +/- one billion, so as to avoid wraparound
           off-by-ones
       (2) even if the short form is applicable, once every (say)

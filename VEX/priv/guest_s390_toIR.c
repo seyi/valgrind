@@ -14309,32 +14309,116 @@ s390_irgen_LCBB(UChar r1, IRTemp op2addr, UChar m3)
 static const HChar *
 s390_irgen_PPNO(UChar r1, UChar r2)
 {
-   // This code doesn't work properly for some reason
+   // This code doesn't work properly for some reason.
+   // TODO: Fix it later
    // if (!s390_host_has_msa5) {
    //    emulation_failure(EmFail_S390X_ppno);
    //    return "ppno";
    // }
 
-   IRDirty *query;
+   /* Theese conditions lead to specification exception */
+   vassert(r1 % 2 == 0);
+   vassert(r2 % 2 == 0);
+   vassert((r1 != 0) && (r2 != 0));
+
+   IRDirty *query, *sha512_gen, *sha512_seed, *sha512_loadparam;
+   IRTemp gpr1num = newTemp(Ity_I8);
+   IRTemp gpr2num = newTemp(Ity_I8);
+
    IRTemp cc = newTemp(Ity_I64);
+
    IRTemp funcCode = newTemp(Ity_I8);
+   IRTemp is_query = newTemp(Ity_I1);
+   IRTemp is_sha512_gen = newTemp(Ity_I1);
+   IRTemp is_sha512_seed = newTemp(Ity_I1);
+   IRTemp is_sha512 = newTemp(Ity_I1);
 
    assign(funcCode, unop(Iop_64to8, binop(Iop_And64, get_gpr_dw0(0), mkU64(0xfULL))));
+   assign(gpr1num, mkU8(r1));
+   assign(gpr2num, mkU8(r2));
 
-   query = unsafeIRDirty_1_N(cc, 0, "s390x_dirtyhelper_PPNO_query",
+   assign(is_query, binop(Iop_CmpEQ8, mkexpr(funcCode), mkU8(S390_PPNO_QUERY)));
+   assign(is_sha512_gen, binop(Iop_CmpEQ8, mkexpr(funcCode), mkU8(S390_PPNO_SHA512_GEN)));
+   assign(is_sha512_seed, binop(Iop_CmpEQ8, mkexpr(funcCode), mkU8(S390_PPNO_SHA512_SEED)));
+   assign(is_sha512, binop(Iop_CmpEQ8,
+                           mkU8(S390_PPNO_SHA512_GEN),
+                           binop(Iop_And8,
+                                 mkexpr(funcCode),
+                                 mkU8(S390_PPNO_SHA512_GEN)
+                                 )
+                           ));
+
+   assign(cc,
+          mkite(mkexpr(is_sha512),
+                mkite(binop(Iop_CmpLE64U, get_gpr_dw0(r1 + 1), mkU64(64)),
+                      mkU64(0),
+                      mkU64(3)
+                      ),
+                mkU64(0)
+               )
+         );
+
+
+   query = unsafeIRDirty_0_N(0, "s390x_dirtyhelper_PPNO_query",
                              &s390x_dirtyhelper_PPNO_query,
                              mkIRExprVec_1(IRExpr_GSPTR()));
-   query->guard = binop(Iop_CmpEQ8, mkexpr(funcCode), mkU8(S390_PPNO_QUERY));
+   query->guard = mkexpr(is_query);
    query->nFxState = 1;
    vex_bzero(&query->fxState, sizeof(query->fxState));
    query->fxState[0].fx     = Ifx_Read;
    query->fxState[0].offset = S390X_GUEST_OFFSET(guest_r0);
    query->fxState[0].size   = 2 * sizeof(ULong); /* gpr0 and gpr1 are read */
    query->mAddr = get_gpr_dw0(1);
-   query->mSize = 16;
+   query->mSize = S390_PPNO_PARAM_BLOCK_SIZE_QUERY;
    query->mFx   = Ifx_Write;
 
+   sha512_gen = unsafeIRDirty_0_N(0, "s390x_dirtyhelper_PPNO_sha512",
+                             &s390x_dirtyhelper_PPNO_sha512,
+                             mkIRExprVec_1(IRExpr_GSPTR()));
+   sha512_gen->guard = mkexpr(is_sha512_gen);
+   sha512_gen->nFxState = 2;
+   vex_bzero(&sha512_gen->fxState, sizeof(sha512_gen->fxState));
+   sha512_gen->fxState[0].fx     = Ifx_Read;
+   sha512_gen->fxState[0].offset = S390X_GUEST_OFFSET(guest_r0);
+   sha512_gen->fxState[0].size   = 2 * sizeof(ULong); /* gpr0 and gpr1 are read */
+   sha512_gen->fxState[1].fx     = Ifx_Modify;
+   sha512_gen->fxState[1].offset = S390X_GUEST_OFFSET(guest_r0) + r1 * sizeof(ULong);
+   sha512_gen->fxState[1].size   = 2 * sizeof(ULong); /* r1 and r1 + 1 are modified */
+   sha512_gen->mAddr = get_gpr_dw0(r1);
+   sha512_gen->mSize = S390_PPNO_MAX_SIZE_SHA512_GEN;
+   sha512_gen->mFx   = Ifx_Write;
+
+   sha512_seed = unsafeIRDirty_0_N(0, "s390x_dirtyhelper_PPNO_sha512",
+                             &s390x_dirtyhelper_PPNO_sha512,
+                             mkIRExprVec_1(IRExpr_GSPTR()));
+   sha512_seed->guard = mkexpr(is_sha512_seed);
+   sha512_seed->nFxState = 2;
+   vex_bzero(&sha512_seed->fxState, sizeof(sha512_seed->fxState));
+   sha512_seed->fxState[0].fx     = Ifx_Read;
+   sha512_seed->fxState[0].offset = S390X_GUEST_OFFSET(guest_r0);
+   sha512_seed->fxState[0].size   = 2 * sizeof(ULong); /* gpr0 and gpr1 are read */
+   sha512_seed->fxState[1].fx     = Ifx_Read;
+   sha512_seed->fxState[1].offset = S390X_GUEST_OFFSET(guest_r0) + r2 * sizeof(ULong);
+   sha512_seed->fxState[1].size   = 2 * sizeof(ULong); /* r2 and r2 + 1 are read */
+   sha512_seed->mAddr = get_gpr_dw0(r2);
+   sha512_seed->mSize = S390_PPNO_MAX_SIZE_SHA512_SEED;
+   sha512_seed->mFx   = Ifx_Write;
+
+   /* Dummy helper which is used to signal VEX library that memory was loaded */
+   sha512_loadparam = unsafeIRDirty_0_N(0, "s390x_dirtyhelper_PPNO_sha512_load_param_block",
+                             &s390x_dirtyhelper_PPNO_sha512_load_param_block,
+                             mkIRExprVec_0());
+   sha512_loadparam->guard = mkexpr(is_sha512);
+   sha512_loadparam->nFxState = 0;
+   vex_bzero(&sha512_loadparam->fxState, sizeof(sha512_loadparam->fxState));
+   sha512_loadparam->mAddr = get_gpr_dw0(1);
+   sha512_loadparam->mSize = S390_PPNO_PARAM_BLOCK_SIZE_SHA512;
+   sha512_loadparam->mFx   = Ifx_Read;
+
    stmt(IRStmt_Dirty(query));
+   stmt(IRStmt_Dirty(sha512_gen));
+   stmt(IRStmt_Dirty(sha512_seed));
+   stmt(IRStmt_Dirty(sha512_loadparam));
 
    s390_cc_thunk_fill(mkU64(S390_CC_OP_SET), mkexpr(cc), mkU64(0), mkU64(0));
 

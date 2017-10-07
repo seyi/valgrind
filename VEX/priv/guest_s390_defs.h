@@ -94,7 +94,9 @@ UInt  s390_do_cvb(ULong decimal);
 ULong s390_do_cvd(ULong binary);
 ULong s390_do_ecag(ULong op2addr);
 UInt  s390_do_pfpo(UInt gpr0);
-ULong s390x_dirtyhelper_PPNO_query(VexGuestS390XState *guest_state);
+void  s390x_dirtyhelper_PPNO_query(VexGuestS390XState *guest_state);
+void  s390x_dirtyhelper_PPNO_sha512(VexGuestS390XState *guest_state, UChar r1, UChar r2);
+void  s390x_dirtyhelper_PPNO_sha512_load_param_block( void );
 /* The various ways to compute the condition code. */
 enum {
    S390_CC_OP_BITWISE = 0,
