@@ -14302,6 +14302,45 @@ s390_irgen_LCBB(UChar r1, IRTemp op2addr, UChar m3)
    return "lcbb";
 }
 
+/* Also known as "prno"
+   If you implement new functions please don't forget to update
+   "s390x_dirtyhelper_PPNO_query" function.
+ */
+static const HChar *
+s390_irgen_PPNO(UChar r1, UChar r2)
+{
+   // This code doesn't work properly for some reason
+   // if (!s390_host_has_msa5) {
+   //    emulation_failure(EmFail_S390X_ppno);
+   //    return "ppno";
+   // }
+
+   IRDirty *query;
+   IRTemp cc = newTemp(Ity_I64);
+   IRTemp funcCode = newTemp(Ity_I8);
+
+   assign(funcCode, unop(Iop_64to8, binop(Iop_And64, get_gpr_dw0(0), mkU64(0xfULL))));
+
+   query = unsafeIRDirty_1_N(cc, 0, "s390x_dirtyhelper_PPNO_query",
+                             &s390x_dirtyhelper_PPNO_query,
+                             mkIRExprVec_1(IRExpr_GSPTR()));
+   query->guard = binop(Iop_CmpEQ8, mkexpr(funcCode), mkU8(S390_PPNO_QUERY));
+   query->nFxState = 1;
+   vex_bzero(&query->fxState, sizeof(query->fxState));
+   query->fxState[0].fx     = Ifx_Read;
+   query->fxState[0].offset = S390X_GUEST_OFFSET(guest_r0);
+   query->fxState[0].size   = 2 * sizeof(ULong); /* gpr0 and gpr1 are read */
+   query->mAddr = get_gpr_dw0(1);
+   query->mSize = 16;
+   query->mFx   = Ifx_Write;
+
+   stmt(IRStmt_Dirty(query));
+
+   s390_cc_thunk_fill(mkU64(S390_CC_OP_SET), mkexpr(cc), mkU64(0), mkU64(0));
+
+   return "ppno";
+}
+
 /* New insns are added here.
    If an insn is contingent on a facility being installed also
    check whether the list of supported facilities in function
@@ -15190,6 +15229,8 @@ s390_decode_4byte_and_irgen(const UChar *bytes)
    case 0xb930: s390_format_RRE_RR(s390_irgen_CGFR, ovl.fmt.RRE.r1,
                                    ovl.fmt.RRE.r2);  goto ok;
    case 0xb931: s390_format_RRE_RR(s390_irgen_CLGFR, ovl.fmt.RRE.r1,
+                                   ovl.fmt.RRE.r2);  goto ok;
+   case 0xb93c: s390_format_RRE_RR(s390_irgen_PPNO, ovl.fmt.RRE.r1,
                                    ovl.fmt.RRE.r2);  goto ok;
    case 0xb93e: /* KIMD */ goto unimplemented;
    case 0xb93f: /* KLMD */ goto unimplemented;

@@ -146,6 +146,15 @@ typedef enum {
    S390_PFPO_D128_TO_F128 = 0x01070A
 } s390_pfpo_function_t;
 
+/* PPNO function code as it is encoded in bits [57:63] of GR0
+   when PFPO insn is executed. */
+typedef enum
+{
+   S390_PPNO_QUERY       = 0x00,
+   S390_PPNO_SHA512_GEN  = 0x03,
+   S390_PPNO_SHA512_SEED = 0x83
+} s390_ppno_function_t;
+
 /* The length of the longest mnemonic: locgrnhe */
 #define S390_MAX_MNEMONIC_LEN  8
 

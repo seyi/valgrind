@@ -39,7 +39,7 @@
 #include "libvex_basictypes.h"
 
 /* VEX can sometimes generate code which returns to the dispatcher
-   with the guest state pointer set to VEX_TRC_JMP_EMWARN or 
+   with the guest state pointer set to VEX_TRC_JMP_EMWARN or
    VEX_TRC_JMP_EMFAIL.  This means that VEX is trying to tell Valgrind
    something noteworthy about emulation progress. For example, that Valgrind
    is doing imprecise emulation in some sense.  The guest's pseudo-register
@@ -69,16 +69,16 @@ typedef
 
       /* unmasking SSE FP exceptions is not supported */
       EmWarn_X86_sseExns,
-      
+
       /* setting mxcsr.fz is not supported */
       EmWarn_X86_fz,
-      
+
       /* setting mxcsr.daz is not supported */
       EmWarn_X86_daz,
 
       /* settings to %eflags.ac (alignment check) are noted but ignored */
       EmWarn_X86_acFlag,
-      
+
       /* unmasking PPC32/64 FP exceptions is not supported */
       EmWarn_PPCexns,
 
@@ -119,6 +119,9 @@ typedef
       /* The function code specified in GPR 0 executed by PFPO
          instruction is invalid */
       EmFail_S390X_invalid_PFPO_function,
+
+      /* ppno insn is not supported on this host */
+      EmFail_S390X_ppno,
 
       EmNote_NUMBER
    }

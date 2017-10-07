@@ -1438,6 +1438,8 @@ const HChar* LibVEX_EmNote_string ( VexEmNote ew )
      case EmFail_S390X_invalid_PFPO_function:
         return "The function code in GPR 0 for the PFPO instruction"
                " is invalid";
+     case EmFail_S390X_ppno:
+        return "Instruction ppno (also known as prno) is not supported on this host";
      default:
         vpanic("LibVEX_EmNote_string: unknown warning");
    }
@@ -1728,6 +1730,7 @@ static const HChar* show_hwcaps_s390x ( UInt hwcaps )
       { VEX_HWCAPS_S390X_LSC,   "lsc" },
       { VEX_HWCAPS_S390X_PFPO,  "pfpo" },
       { VEX_HWCAPS_S390X_LSC2,  "lsc2" },
+      { VEX_HWCAPS_S390X_MSA5,  "msa5" }
    };
    /* Allocate a large enough buffer */
    static HChar buf[sizeof prefix +

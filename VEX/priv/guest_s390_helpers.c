@@ -2412,6 +2412,37 @@ missed:
    return NULL;
 }
 
+
+/*-----------------------------------------------------------------*/
+/*--- Dirty helper for Perform Pseudorandom number instruction  ---*/
+/*-----------------------------------------------------------------*/
+#if defined(VGA_s390x)
+
+/* IMPORTANT!
+   We return here bit mask where only supported functions are set to one.
+   If you implement new functions don't forget the supported array.
+ */
+ULong
+s390x_dirtyhelper_PPNO_query(VexGuestS390XState *guest_state)
+{
+   ULong supported[2] = {0x9000000000000000ULL, 0x0000000000000000ULL};
+   ULong *result = (ULong*) guest_state->guest_r1;
+
+   result[0] = supported[0];
+   result[1] = supported[1];
+
+   return 0;
+}
+
+#else
+
+ULong
+s390x_dirtyhelper_PPNO_query(VexGuestS390XState *guest_state)
+{
+   return 0;
+}
+#endif /* VGA_s390x */
+
 /*---------------------------------------------------------------*/
 /*--- end                                guest_s390_helpers.c ---*/
 /*---------------------------------------------------------------*/
